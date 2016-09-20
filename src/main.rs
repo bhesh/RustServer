@@ -8,9 +8,20 @@ extern crate mio;
 
 mod server;
 
+use server::handler;
+use std::io;
+use std::io::Write;
+
+/// Handles the request
+fn handle_request(req: &handler::Request, res: &handler::Response) {}
+
+/// Main entry point
 fn main() {
-	let server = server::Server::new(8080, 1024).expect("Unable to create the server");
-	let (sock, addr) = server.start().expect("Error accepting");
-	println!("Sock: {:?}", sock);
-	println!("Addr: {:?}", addr);
+	let port: u16 = 8080;
+	let mut server = server::Server::new(port, handle_request, 1024).expect("Error: Unable to create the server");
+	println!("Starting server on port {}", port);
+	match server.start() {
+		Ok(_) => {}
+		Err(e) => { write!(io::stderr(), "Error: {}", e.to_string()).unwrap(); }
+	}
 }

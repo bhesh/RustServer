@@ -10,7 +10,10 @@ use mio;
 use mio::tcp;
 use std::net;
 use std::io;
+use std::io::Write;
+use std::fmt;
 
+/// Set the tokens
 const SERVER_V4: mio::Token = mio::Token(0);
 const SERVER_V6: mio::Token = mio::Token(1);
 
@@ -19,13 +22,24 @@ const SERVER_V6: mio::Token = mio::Token(1);
  *********************************************************************/
 
 /// Defines the Server structure
-#[derive(Debug)]
 pub struct Server {
-	backlog: usize,
 	addr_v4: net::SocketAddrV4,
 	addr_v6: net::SocketAddrV6,
 	listener_v4: tcp::TcpListener,
 	listener_v6: tcp::TcpListener,
+	func: fn(&handler::Request, &handler::Response),
+	backlog: usize,
+	conns: Vec<ClientThread>,
+}
+
+/// Define Debug
+impl fmt::Debug for Server {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f, "{{ {:?}, {:?}, {:?}, {:?}, backlog: {} }}", 
+				self.addr_v4, self.addr_v6, 
+				self.listener_v4, self.listener_v6,
+				self.backlog)
+	}
 }
 
 /// Implement drop
@@ -40,21 +54,23 @@ impl Drop for Server {
 impl Server {
 
 	/// Creates a server object listening on the specified port
-	pub fn new(port: u16, backlog: usize) -> Result<Server, Error> {
+	pub fn new(port: u16, func: fn(&handler::Request, &handler::Response), backlog: usize) -> Result<Server, Error> {
 		let sa4 = net::SocketAddrV4::new(net::Ipv4Addr::new(0, 0, 0, 0), port);
 		let sa6 = net::SocketAddrV6::new(net::Ipv6Addr::new(0, 0, 0, 0, 0 ,0, 0, 0), port, 0, 0);
 		let s = Server {
-			backlog: backlog,
 			addr_v4: sa4,
 			addr_v6: sa6,
 			listener_v4: try!(tcp::TcpListener::bind(&net::SocketAddr::V4(sa4))),
 			listener_v6: try!(tcp::TcpListener::bind(&net::SocketAddr::V6(sa6))),
+			func: func,
+			backlog: backlog,
+			conns: Vec::new(),
 		};
 		Ok(s)
 	}
 
-	/// Starts the server
-	pub fn start(&self) -> Result<(tcp::TcpStream, net::SocketAddr), Error> {
+	/// Starts the server loop
+	pub fn start(&mut self) -> Result<(), Error> {
 		let poll = try!(mio::Poll::new());
 		try!(poll.register(&self.listener_v4, SERVER_V4, mio::Ready::readable(), mio::PollOpt::edge() | mio::PollOpt::oneshot()));
 		try!(poll.register(&self.listener_v6, SERVER_V6, mio::Ready::readable(), mio::PollOpt::edge() | mio::PollOpt::oneshot()));
@@ -63,11 +79,20 @@ impl Server {
 			try!(poll.poll(&mut events, None));
 			for event in events.iter() {
 				match event.token() {
-					SERVER_V4 => { return Ok(try!(self.listener_v4.accept())); }
-					SERVER_V6 => { return Ok(try!(self.listener_v6.accept())); }
+					SERVER_V4 => { self.conns.push(Server::make_client_thread(try!(self.listener_v4.accept()))); }
+					SERVER_V6 => { self.conns.push(Server::make_client_thread(try!(self.listener_v6.accept()))); }
 					_ => { unreachable!(); }
 				}
 			}
+		}
+	}
+
+	/// Make client thread
+	fn make_client_thread(conn: (tcp::TcpStream, net::SocketAddr)) -> ClientThread {
+		let (sock, addr) = conn;
+		ClientThread {
+			addr: addr,
+			sock: sock,
 		}
 	}
 }
@@ -85,16 +110,10 @@ struct ClientThread {
 /// Implements a destructor
 impl Drop for ClientThread {
 	fn drop(&mut self) {
-		self.sock.shutdown(tcp::Shutdown::Both);
-	}
-}
-
-/// Functions for the handler
-impl ClientThread {
-
-	/// Handles the server connection
-	fn handle_client<T>(&self, handler: T) where T: handler::HandlesRequests {
-		
+		match self.sock.shutdown(tcp::Shutdown::Both) {
+			Ok(_) => {}
+			Err(e) => { write!(io::stderr(), "Error: {}", e.to_string()).unwrap(); }
+		}
 	}
 }
 
@@ -120,5 +139,12 @@ impl From<net::AddrParseError> for Error {
 impl From<io::Error> for Error {
 	fn from(err: io::Error) -> Error {
 		Error::Io(err)
+	}
+}
+
+/// Implement display
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		write!(f, "{:?}", self)
 	}
 }
