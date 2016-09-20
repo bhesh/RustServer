@@ -4,10 +4,13 @@
 ///
 /// Brian Hession - hessionb@gmail.com
 
-mod net;
-use net::server;
+extern crate mio;
+
+mod server;
 
 fn main() {
-	let s = server::Server::new(8080).expect("Unable to create the server");
-	println!("Server: {:?}", s);
+	let server = server::Server::new(8080, 1024).expect("Unable to create the server");
+	let (sock, addr) = server.start().expect("Error accepting");
+	println!("Sock: {:?}", sock);
+	println!("Addr: {:?}", addr);
 }
